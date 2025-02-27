@@ -1,15 +1,178 @@
 ---
-title: "Habits"
-author: "John Doe"
-format: revealjs
+title: "Positional Embeddings for Multi-Vehicle Observations in Highway-Env"
+author: "Dhruv Dhamani, David Bayha, Geet Saurabh Kunumala, Yingjie Ma"
+date: "02-26-2025"
+format: 
+  revealjs:
+    slideNumber: true
+    center: false
+    toc: true
+    code-fold: false
+    transition: slide
+    theme: simple
+bibliography: refs.bib
 ---
 
-## Getting up
+## Proposal: Positional Embeddings for Multi-Vehicle Observations in Highway-Env
 
-- Turn off alarm
-- Get out of bed
+::: {.columns}
+:::: {.column width="50%"}
+**Team Members**  
+- Dhruv Dhamani  
+- David Bayha  
+- Geet Saurabh Kunumala  
+- Yingjie Ma  
+::::
+:::: {.column width="50%"}
+![HighwayEnv Example](https://raw.githubusercontent.com/eleurent/highway-env/gh-media/docs/media/highway-env.gif?raw=true){width=80%}
 
-## Going to sleep
+::::
+:::
 
-- Get in bed
-- Count sheep
+
+
+## Problem Statement
+
+- We use **[highway-env](https://github.com/Farama-Foundation/HighwayEnv)**, where the agent observes up to N other vehicles in a 2D environment (positions, velocities, etc.).  
+- Typically, these vehicles are sorted by distance, but the order can change when vehicles overtake each other or if the environment re-sorts them.  
+- **Challenge**: A naive MLP policy may inadvertently learn to rely on row positions in the observation array. When those positions get shuffled, performance degrades.
+
+
+
+## Motivation
+
+- **Why does ordering matter?**  
+  - In realistic traffic, vehicle ordering is dynamic (front/rear changes).  
+  - Without consistent ordering, the agent may lose track of which row corresponds to which vehicle.  
+
+- **Goal**:  
+  - Investigate whether **positional embeddings** (e.g., “rank embeddings” or “distance embeddings”) can robustly encode each vehicle’s relative position, mitigating confusion from random or changing order.
+
+
+
+## Literature Survey
+
+**1. Highway-Env & RL**  
+- @leurentEnvironmentAutonomousDriving2018 introduced `highway-env` as a simplified autonomous-driving decision-making environment.  
+- Many works (DQN, PPO, MCTS) assume **consistent vehicle ordering** (e.g., nearest-first) to simplify the observation space.  
+- @chenDeepMultiagentReinforcement2022 “Deep Multi-agent RL for Highway On-Ramp Merging” PPO but still relied on stable indexing.
+- **Gap**: ROPE has shown promise in natural language processing, but has not been applied to highway-env for positionally-aware vehicle observations.
+
+## Literature Survey (cont.)
+
+**3. Permutation Invariance & Positional Embeddings**  
+- @zaheerDeepSets2018: Networks that aggregate “sets” in a permutation-invariant manner.  
+- @qiPointNetDeepLearning2017: Uses symmetric functions (e.g., max/mean) to handle unordered 3D point clouds.  
+- @vaswaniAttentionAllYou2023a: Introduced **positional encodings** for sequence order in text.  
+  - **Analogy**: We can embed “rank” or “distance” to identify each vehicle.  
+
+## Proposed Approach
+
+### Our Difference
+
+- We systematically **randomize** the vehicle array order each timestep *and* add a “distance/rank” embedding to each vehicle.  
+- This simpler approach (vs. full attention/graph networks) tests whether explicit positional info can recoup robust performance under random ordering.
+
+## Three Experiments
+
+1. **Sorted Order (Baseline)**  
+   - Use default “distance-sorted” array from highway-env.  
+   - Flatten features into an MLP.  
+
+2. **Random Order (No Embedding)**  
+   - Randomly shuffle the vehicle array each timestep.  
+   - See if the agent can still learn “front vs. rear” from raw \([x,y,vx,vy]\) alone.  
+
+3. **Random Order + Positional Embeddings**  
+   - Same random shuffle, **plus** a “distance” or “rank” embedding appended to each vehicle’s features.  
+   - Hypothesis: Embeddings restore (or even surpass) baseline performance by encoding each vehicle’s relative position.
+
+## Research Questions
+
+1. How much does randomizing the vehicle array degrade performance?  
+2. Can explicit positional embeddings recover or exceed the baseline? How does this compare to sorted ordering?  
+3. Is the approach stable across different seeds or traffic densities? (optional)
+  
+## Method & Metrics
+
+- **Algorithm**: PPO
+- **Network**: (to be determined, MLP for now)
+- **Observations**: N = 15 vehicles, each with features `[x, y, vx, vy, ...]`
+- **Action**: Continuous (throttle, steering)  
+- **Evaluation**:  
+  - **Cumulative Reward**, **Collision Rate**, **Average Speed**, **Training Stability**
+
+## Timeline
+
+1. **Weeks 1–2**  
+   - **Baseline Environment Setup**  
+     - Configure `highway-env` for continuous-control PPO.  
+   - **Baseline (Sorted) Training**  
+     - Validate that PPO can learn stable driving policies with default “distance-sorted” observations.  
+
+2. **Weeks 3–4**  
+   - **Random Vehicle Ordering (No Embedding)**  
+     - Implement a wrapper or environment modification that randomizes the order of the vehicles in each observation.  
+   - **Preliminary Experiments**  
+     - Train and gather basic metrics (reward, collisions) to gauge performance drop.
+
+## Timeline (cont.)
+
+3. **Weeks 5–6**  
+   - **Positional Embeddings**  
+     - Add a “rank” or “distance-based” embedding to each vehicle’s feature vector.  
+     - Decide on embedding approach (sinusoidal vs. learned embedding).  
+   - **Run Main Experiments**  
+     - Compare “random + embeddings” to the prior methods.  
+
+4. **Weeks 7–8**  
+   - **Analysis & Visualization**  
+     - Compile training curves, collision rates, speed distributions.  
+     - Possibly refine hyperparameters (learning rate, network size).  
+
+5. **Final Weeks**  
+   - **Finalize Results**  
+     - Summarize findings and insights across all experiments.  
+     - Prepare final presentation slides and NeurIPS-style report.
+ 
+
+## Team Roles
+
+- **Dhruv Dhamani**  
+  - Sets up `highway-env` with PPO for continuous control.  
+  - Leads baseline experiment (Weeks 1–2).  
+  - Coordinates code integration across branches.
+
+- **David Bayha**  
+  - Implements the random ordering logic (Weeks 3–4).  
+  - Oversees the environment wrapper design.  
+  - Assists with code debugging and incremental tests.
+
+## Team Roles (cont.)
+
+- **Geet Saurabh Kunumala**  
+  - Develops positional embedding approach (Weeks 5–6).  
+  - Experiments with embedding dimensions and styles (sinusoidal vs. learned).  
+  - Works on partial ablation tests if time allows.
+
+- **Yingjie Ma**  
+  - Conducts data collection and result visualization (Weeks 7–8).  
+  - Analyzes training stability across seeds and tunes hyperparameters.  
+  - Finalizes slides and NeurIPS report, ensuring consistency in documentation.
+
+
+
+## Expected Outcomes
+
+- **Insight #1**: Quantify performance drop from randomization.  
+- **Insight #2**: Demonstrate if distance/rank embedding recovers or improves upon the baseline.  
+- **Potential Future Work**:  
+  - Using an attention-based or transformer-like architecture for truly permutation-invariant multi-vehicle observations.  
+  - Testing the approach on other highway-env tasks (merging, roundabout, intersection).
+
+
+
+## References
+
+::: {#refs}
+:::
