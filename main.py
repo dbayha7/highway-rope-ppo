@@ -10,12 +10,127 @@ import time
 import random
 import os
 import copy
+import logging
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
 from joblib import Parallel, delayed
 from highway_env import _register_highway_envs
+
+# At the top with other constants
+ARTIFACTS_DIR = os.path.join("artifacts", "highway-ppo")
+
+
+# Then ensure_artifacts_dir
+def ensure_artifacts_dir(custom_path=None):
+    """Create the artifacts directory if it doesn't exist."""
+    artifacts_dir = custom_path or ARTIFACTS_DIR
+    os.makedirs(artifacts_dir, exist_ok=True)
+    return artifacts_dir
+
+
+# Directory to store log files (under artifacts)
+LOGS_DIR = os.path.join(ARTIFACTS_DIR, "logs")
+
+
+# Configure logging functionality
+def setup_master_logger(log_level=logging.INFO):
+    """
+    Create and configure the master logger.
+    This logger writes to:
+      - A single 'master.log' file in LOGS_DIR
+      - The console (stdout) with INFO-level
+    """
+    # Create logs directory if it doesn't exist
+    os.makedirs(LOGS_DIR, exist_ok=True)
+
+    # Create a unique log file name with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    master_log_path = os.path.join(LOGS_DIR, f"{timestamp}_master.log")
+
+    # Configure master logger
+    logger = logging.getLogger("master_logger")
+    logger.setLevel(log_level)
+    logger.handlers = []  # Clear any existing handlers
+
+    # File handler for master.log
+    fh = logging.FileHandler(master_log_path)
+    fh.setLevel(log_level)
+    fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    logger.addHandler(fh)
+
+    # Console handler at INFO-level
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(log_level)
+    ch.setFormatter(
+        logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%H:%M:%S")
+    )
+    logger.addHandler(ch)
+
+    logger.info(f"Master logger initialized. Log file: {master_log_path}")
+    return logger
+
+
+def setup_experiment_logger(
+    experiment_id, log_level=logging.INFO, console_level=logging.WARNING
+):
+    """
+    Create and configure a per-experiment logger.
+    Writes detailed logs to 'experiment_<id>.log'
+    Logs only warnings or higher to the console to avoid spamming.
+    """
+    # Create logs directory if it doesn't exist
+    os.makedirs(LOGS_DIR, exist_ok=True)
+
+    # Create a unique log file name with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logger_name = f"experiment_{experiment_id}"
+    exp_log_path = os.path.join(LOGS_DIR, f"{timestamp}_{logger_name}.log")
+
+    # Configure experiment logger
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(log_level)
+    logger.handlers = []  # Clear any existing handlers
+
+    # File handler for experiment logs - capture all logs
+    fh = logging.FileHandler(exp_log_path)
+    fh.setLevel(log_level)
+    fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    logger.addHandler(fh)
+
+    # Console handler - only show important messages
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(console_level)  # Higher level to reduce console noise
+    ch.setFormatter(
+        logging.Formatter(
+            "%(asctime)s | %(name)s | %(levelname)s | %(message)s", "%H:%M:%S"
+        )
+    )
+    logger.addHandler(ch)
+
+    logger.info(
+        f"Experiment logger initialized for experiment_{experiment_id}. Log file: {exp_log_path}"
+    )
+    return logger
+
+
+# For backward compatibility with existing code
+def setup_logger(experiment_name="", log_level=logging.INFO):
+    """Legacy function for backward compatibility"""
+    if experiment_name:
+        return setup_experiment_logger(experiment_name, log_level)
+    else:
+        return setup_master_logger(log_level)
+
 
 # if highway_env is not registered, register it
 if "highway-v0" not in gym.envs.registry:
     _register_highway_envs()
+
+# This implementation uses highway-env's built-in observation normalization
+# By setting "normalize": True in the environment config, observations are
+# automatically scaled to the range [-1, 1] based on features_range
 
 # Constants for reproducibility
 SEED = 42
@@ -49,7 +164,16 @@ HIGHWAY_CONFIG = {
         "type": "Kinematics",
         "vehicles_count": 15,  # Number of vehicles to observe
         "features": ["x", "y", "vx", "vy"],  # Features to include
-        "normalize": False,  # We'll do our own normalization
+        "normalize": True,  # Use built-in highway-env normalization
+        "features_range": {
+            "x": [-100, 100],
+            "y": [-100, 100],
+            "vx": [-30, 30],
+            "vy": [-30, 30],
+            "presence": [0, 1],
+            "cos_h": [-1, 1],
+            "sin_h": [-1, 1],
+        },
         "absolute": False,
         "order": "sorted",
     },
@@ -73,16 +197,22 @@ HIGHWAY_CONFIG = {
 
 
 # Setup reproducibility across all libraries
-def set_random_seeds(seed=SEED):
+def set_random_seeds(seed=SEED, exact_reproducibility=False):
     """Set random seeds for reproducibility across all relevant libraries."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)  # if multi-GPU
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False  # more consistent
+        torch.cuda.manual_seed_all(seed)
+
+    # Only enforce deterministic behavior if exact reproducibility needed
+    if exact_reproducibility:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        # Allow cuDNN to benchmark and select fastest algorithms
+        torch.backends.cudnn.benchmark = True
 
 
 # Determine the optimal compute device
@@ -104,101 +234,6 @@ device, device_name = get_device()
 print(f"Using {device_name} for training.")
 
 
-# Create the artifacts directory if it doesn't exist
-def ensure_artifacts_dir():
-    """Create the artifacts/highway-ppo directory if it doesn't exist."""
-    artifacts_dir = os.path.join("artifacts", "highway-ppo")
-    os.makedirs(artifacts_dir, exist_ok=True)
-    return artifacts_dir
-
-
-# State Normalizer for better learning
-class RunningStatNormalizer:
-    """
-    Maintains running statistics (mean, variance) to normalize state inputs.
-
-    State normalization is crucial in RL to ensure consistent input scales,
-    which helps stabilize training and improve convergence.
-    """
-
-    def __init__(self, shape, eps=1e-8):
-        """
-        Initialize running statistics trackers.
-
-        Args:
-            shape: Dimensions of the state space
-            eps: Small constant to avoid numerical instability and division by zero
-        """
-        self.mean = np.zeros(
-            shape, dtype=np.float32
-        )  # Running mean initialized to zeros
-        self.var = np.ones(
-            shape, dtype=np.float32
-        )  # Running variance initialized to ones
-        self.count = eps  # Counter for number of samples seen (initialized with eps for stability)
-
-    def update(self, x):
-        """
-        Update running statistics with new observations using Welford's online algorithm.
-
-        This method efficiently computes running mean and variance without storing all data.
-
-        Args:
-            x: New state observation(s) to incorporate into statistics
-        """
-        # Handle single state case by reshaping to a batch of size 1
-        if x.ndim == 1:
-            x = x.reshape(1, -1)
-
-        # Calculate statistics of the new batch
-        batch_mean = np.mean(x, axis=0)
-        batch_var = np.var(x, axis=0)
-        batch_count = x.shape[0]
-
-        # Calculate the difference between current mean and batch mean
-        delta = batch_mean - self.mean
-
-        # Compute the updated count of all samples seen so far
-        total_count = self.count + batch_count
-
-        # Update running mean using the weighted average formula
-        # new_mean = old_mean + (batch_mean - old_mean) * (batch_count / total_count)
-        new_mean = self.mean + delta * (batch_count / total_count)
-
-        # Update running variance using the parallel combination formula
-        # This is mathematically equivalent to recalculating variance with all samples
-        m_a = self.var * self.count  # Sum of squares for previous samples
-        m_b = batch_var * batch_count  # Sum of squares for new batch
-        # Additional term accounts for the shift in mean
-        M2 = m_a + m_b + np.square(delta) * self.count * batch_count / total_count
-        new_var = M2 / total_count
-
-        # Store the updated statistics
-        self.mean, self.var, self.count = new_mean, new_var, total_count
-
-    def normalize(self, x):
-        """
-        Normalize input states using current running statistics.
-
-        Standardizes data to have zero mean and unit variance, which helps
-        neural networks train more effectively.
-
-        Args:
-            x: State(s) to normalize - can be numpy array or torch tensor
-
-        Returns:
-            Normalized state(s) in the same format as input
-        """
-        # Handle torch tensors by converting to numpy, normalizing, then back to tensor
-        if isinstance(x, torch.Tensor):
-            x_np = x.cpu().numpy()
-            normalized = (x_np - self.mean) / np.sqrt(self.var + 1e-8)
-            return torch.FloatTensor(normalized).to(x.device)
-
-        # For numpy arrays, directly apply normalization
-        return (x - self.mean) / np.sqrt(self.var + 1e-8)
-
-
 # Neural Network Architecture
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=128):
@@ -217,7 +252,7 @@ class ActorCritic(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
-            nn.Tanh(),  # Bound outputs to [-1, 1]
+            # Remove Tanh here as we'll apply it after sampling
         )
 
         # Log standard deviation (learnable parameter)
@@ -245,35 +280,50 @@ class ActorCritic(nn.Module):
         return action_mean, action_std, state_value
 
     def get_action(self, state, deterministic=False):
-        # Get action distribution parameters
+        # Get mean and std
         action_mean, action_std, value = self.forward(state)
 
-        # Create a normal distribution
-        dist = Normal(action_mean, action_std)
+        # Create normal distribution
+        normal_dist = Normal(action_mean, action_std)
 
-        # Sample from the distribution or take the mean
         if deterministic:
-            action = action_mean
+            # For deterministic, just use the mean (no sampling)
+            z = action_mean
+            action = torch.tanh(z)
+            log_prob = None  # Not needed for deterministic actions
         else:
-            action = dist.sample()
+            # Sample from normal distribution (pre-tanh)
+            z = normal_dist.sample()
+            # Apply tanh to bound actions to [-1, 1]
+            action = torch.tanh(z)
 
-        # Clamp actions to valid range [-1, 1]
-        action = torch.clamp(action, -1.0, 1.0)
+            # Compute log_prob with change of variables formula
+            # log π(a) = log π(z) - log(1 - tanh²(z))
+            # = log π(z) - sum(log(1 - a²))
+            log_prob = normal_dist.log_prob(z) - torch.log(1 - action.pow(2) + 1e-6)
+            log_prob = log_prob.sum(dim=-1)
 
-        # Get log probability of the action (sum across action dimensions)
-        log_prob = dist.log_prob(action).sum(dim=-1)
+        return (
+            action.cpu().numpy(),
+            z.cpu().numpy(),
+            log_prob.item() if log_prob is not None else None,
+            value.cpu().numpy()[0],
+        )
 
-        return action.cpu().numpy(), log_prob.item(), value.cpu().numpy()[0]
-
-    def evaluate(self, states, actions):
+    def evaluate(self, states, actions, pre_tanh_actions):
         # Get action distribution parameters and state values
         action_means, action_stds, state_values = self.forward(states)
 
         # Create normal distributions
         dist = Normal(action_means, action_stds)
 
-        # Get log probabilities (sum across action dimensions)
-        log_probs = dist.log_prob(actions).sum(dim=-1)
+        # Get log probabilities using pre-tanh actions
+        log_probs = dist.log_prob(pre_tanh_actions)
+
+        # Apply change of variables formula for tanh transformation
+        tanh_actions = torch.tanh(pre_tanh_actions)
+        log_probs = log_probs - torch.log(1 - tanh_actions.pow(2) + 1e-6)
+        log_probs = log_probs.sum(dim=-1)
 
         # Get entropy (sum across action dimensions)
         entropy = dist.entropy().sum(dim=-1)
@@ -285,7 +335,8 @@ class ActorCritic(nn.Module):
 class PPOMemory:
     def __init__(self, batch_size=64):
         self.states = []
-        self.actions = []
+        self.actions = []  # Store post-Tanh actions for environment interaction
+        self.pre_tanh_actions = []  # Store pre-Tanh actions for correct log_prob calculation
         self.rewards = []
         self.next_states = []
         self.log_probs = []
@@ -293,9 +344,12 @@ class PPOMemory:
         self.values = []
         self.batch_size = batch_size
 
-    def store(self, state, action, reward, next_state, log_prob, done, value):
+    def store(
+        self, state, action, pre_tanh_action, reward, next_state, log_prob, done, value
+    ):
         self.states.append(state)
         self.actions.append(action)
+        self.pre_tanh_actions.append(pre_tanh_action)
         self.rewards.append(reward)
         self.next_states.append(next_state)
         self.log_probs.append(log_prob)
@@ -305,6 +359,7 @@ class PPOMemory:
     def clear(self):
         self.states = []
         self.actions = []
+        self.pre_tanh_actions = []
         self.rewards = []
         self.next_states = []
         self.log_probs = []
@@ -343,11 +398,11 @@ class PPOMemory:
 
     def get_tensors(self):
         states = torch.FloatTensor(np.array(self.states)).to(device)
-        # Change to FloatTensor for continuous actions
         actions = torch.FloatTensor(np.array(self.actions)).to(device)
+        pre_tanh_actions = torch.FloatTensor(np.array(self.pre_tanh_actions)).to(device)
         old_log_probs = torch.FloatTensor(np.array(self.log_probs)).to(device)
 
-        return states, actions, old_log_probs
+        return states, actions, pre_tanh_actions, old_log_probs
 
 
 # PPO Agent
@@ -366,6 +421,7 @@ class PPOAgent:
         epochs=EPOCHS,
         batch_size=BATCH_SIZE,
         hidden_dim=HIDDEN_DIM,
+        logger=None,
     ):
         self.actor_critic = ActorCritic(state_dim, action_dim, hidden_dim).to(device)
         self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=lr)
@@ -377,28 +433,22 @@ class PPOAgent:
         self.entropy_coef = entropy_coef
         self.max_grad_norm = max_grad_norm
         self.epochs = epochs
+        self.logger = logger or logging.getLogger("ppo_highway")
 
         self.memory = PPOMemory(batch_size)
-        self.normalizer = RunningStatNormalizer(shape=(state_dim,))
 
     def select_action(self, state, deterministic=False):
-        # Update normalizer with the state
-        self.normalizer.update(state)
-
-        # Normalize state
-        normalized_state = self.normalizer.normalize(state)
-
         with torch.no_grad():
-            # Get action, log probability, and value
-            action, log_prob, value = self.actor_critic.get_action(
-                normalized_state, deterministic
+            # Get action, pre_tanh_action, log probability, and value
+            action, pre_tanh_action, log_prob, value = self.actor_critic.get_action(
+                state, deterministic
             )
 
-        return action, log_prob, value, normalized_state
+        return action, pre_tanh_action, log_prob, value
 
     def update(self, last_value=0.0):
         # Get data from memory
-        states, actions, old_log_probs = self.memory.get_tensors()
+        states, actions, pre_tanh_actions, old_log_probs = self.memory.get_tensors()
         advantages, returns = self.memory.compute_advantages(
             self.gamma, self.lam, last_value
         )
@@ -413,24 +463,46 @@ class PPOAgent:
         # Get batches
         batches = self.memory.get_batches()
 
+        # Metrics to track
+        total_policy_loss = 0
+        total_value_loss = 0
+        total_entropy = 0
+        total_loss = 0
+        clip_fraction = 0
+        approx_kl_div = 0
+        explained_var = 0
+
         # Optimization loop
-        for _ in range(self.epochs):
+        for epoch in range(self.epochs):
+            epoch_policy_loss = 0
+            epoch_value_loss = 0
+            epoch_entropy = 0
+            epoch_total_loss = 0
+            epoch_clip_count = 0
+            epoch_kl_sum = 0
+
             for batch_indices in batches:
                 # Get batch data
                 batch_states = states[batch_indices]
-                # No longer need to normalize states here as we're already using normalized states
                 batch_actions = actions[batch_indices]
+                batch_pre_tanh_actions = pre_tanh_actions[batch_indices]
                 batch_old_log_probs = old_log_probs[batch_indices]
                 batch_advantages = advantages[batch_indices]
                 batch_returns = returns[batch_indices]
 
-                # Evaluate actions
+                # Evaluate actions using pre-tanh actions for correct log probs
                 new_log_probs, state_values, entropy = self.actor_critic.evaluate(
-                    batch_states, batch_actions
+                    batch_states, batch_actions, batch_pre_tanh_actions
                 )
 
                 # Calculate ratios
                 ratios = torch.exp(new_log_probs - batch_old_log_probs)
+
+                # Calculate KL divergence
+                with torch.no_grad():
+                    log_ratio = new_log_probs - batch_old_log_probs
+                    batch_kl = ((torch.exp(log_ratio) - 1) - log_ratio).mean().item()
+                    epoch_kl_sum += batch_kl
 
                 # Calculate surrogate losses
                 surr1 = ratios * batch_advantages
@@ -446,14 +518,12 @@ class PPOAgent:
                 state_values = state_values.squeeze(-1)  # Fix potential shape issues
                 critic_loss = F.mse_loss(state_values, batch_returns)
 
-                # Calculate entropy
-                entropy_loss = -entropy.mean()
-
-                # Total loss
+                # Calculate entropy bonus
+                entropy_bonus = entropy.mean()
                 loss = (
                     actor_loss
                     + self.value_coef * critic_loss
-                    + self.entropy_coef * entropy_loss
+                    - self.entropy_coef * entropy_bonus
                 )
 
                 # Update weights
@@ -464,24 +534,127 @@ class PPOAgent:
                 )
                 self.optimizer.step()
 
+                # Count clipped samples
+                with torch.no_grad():
+                    clip_count = (
+                        (torch.abs(ratios - 1.0) > self.eps_clip).float().sum().item()
+                    )
+                    epoch_clip_count += clip_count / len(batch_indices)
+
+                # Accumulate losses for this epoch
+                epoch_policy_loss += actor_loss.item()
+                epoch_value_loss += critic_loss.item()
+                epoch_entropy += entropy_bonus.item()
+                epoch_total_loss += loss.item()
+
+            # Average over batches
+            num_batches = len(batches)
+            epoch_policy_loss /= num_batches
+            epoch_value_loss /= num_batches
+            epoch_entropy /= num_batches
+            epoch_total_loss /= num_batches
+            epoch_clip_fraction = epoch_clip_count / num_batches
+            epoch_approx_kl = epoch_kl_sum / num_batches
+
+            # Accumulate for overall metrics
+            total_policy_loss += epoch_policy_loss
+            total_value_loss += epoch_value_loss
+            total_entropy += epoch_entropy
+            total_loss += epoch_total_loss
+            clip_fraction += epoch_clip_fraction
+            approx_kl_div += epoch_approx_kl
+
+            # Log epoch details in compact key=value format at DEBUG level
+            self.logger.debug(
+                "epoch=%d/%d loss=%.4f policy_loss=%.4f value_loss=%.4f entropy=%.4f clip_frac=%.3f kl=%.5f",
+                epoch + 1,
+                self.epochs,
+                epoch_total_loss,
+                epoch_policy_loss,
+                epoch_value_loss,
+                epoch_entropy,
+                epoch_clip_fraction,
+                epoch_approx_kl,
+            )
+
+        # Calculate explained variance
+        with torch.no_grad():
+            y_pred = torch.FloatTensor(self.memory.values).to(device)
+            y_true = returns[:-1] if len(returns) > len(y_pred) else returns
+            var_y = torch.var(y_true)
+            explained_var = 1 - torch.var(y_true - y_pred) / var_y if var_y > 0 else 0
+            explained_var = explained_var.item()
+
+        # Average over epochs
+        avg_policy_loss = total_policy_loss / self.epochs
+        avg_value_loss = total_value_loss / self.epochs
+        avg_entropy = total_entropy / self.epochs
+        avg_total_loss = total_loss / self.epochs
+        avg_clip_fraction = clip_fraction / self.epochs
+        avg_approx_kl = approx_kl_div / self.epochs
+
+        # Log update summary in more concise key=value format at INFO level
+        self.logger.info(
+            "update_complete loss=%.4f policy_loss=%.4f value_loss=%.4f entropy=%.4f clip_frac=%.3f kl=%.5f explained_var=%.3f",
+            avg_total_loss,
+            avg_policy_loss,
+            avg_value_loss,
+            avg_entropy,
+            avg_clip_fraction,
+            avg_approx_kl,
+            explained_var,
+        )
+
         # Clear memory
         self.memory.clear()
 
-    def save(self, path):
-        # Ensure the artifacts directory exists
-        artifacts_dir = ensure_artifacts_dir()
-        # Create full path including artifacts directory
-        full_path = os.path.join(artifacts_dir, path)
-        torch.save(self.actor_critic.state_dict(), full_path)
-        print(f"Model saved to {full_path}")
+        # Return metrics for potential further use
+        return {
+            "loss": avg_total_loss,
+            "policy_loss": avg_policy_loss,
+            "value_loss": avg_value_loss,
+            "entropy": avg_entropy,
+            "clip_fraction": avg_clip_fraction,
+            "approx_kl": avg_approx_kl,
+            "explained_variance": explained_var,
+        }
 
-    def load(self, path):
-        # Check if path includes directory, if not, assume it's in artifacts
+    def save(self, path):
+        artifacts_dir = ensure_artifacts_dir()
+        full_path = os.path.join(artifacts_dir, path)
+
+        # Save both model and optimizer state for full resumability
+        checkpoint = {
+            "model": self.actor_critic.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "normalizer_stats": None,  # If you ever add normalizer back
+            "config": {
+                "state_dim": self.actor_critic.shared[0].in_features,
+                "action_dim": len(self.actor_critic.log_std),
+                "hidden_dim": self.actor_critic.shared[0].out_features,
+                "lr": self.optimizer.param_groups[0]["lr"],
+                "gamma": self.gamma,
+                "lam": self.lam,
+                "eps_clip": self.eps_clip,
+            },
+        }
+
+        torch.save(checkpoint, full_path)
+        self.logger.info("model_saved path=%s", full_path)
+
+    def load(self, path, load_optimizer=True):
         if os.path.dirname(path) == "":
             artifacts_dir = ensure_artifacts_dir()
             path = os.path.join(artifacts_dir, path)
-        self.actor_critic.load_state_dict(torch.load(path))
-        print(f"Model loaded from {path}")
+
+        checkpoint = torch.load(path)
+        self.actor_critic.load_state_dict(checkpoint["model"])
+
+        if load_optimizer and "optimizer" in checkpoint:
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+
+        self.logger.info("model_loaded path=%s", path)
+        return checkpoint.get("config", {})  # Return config for inspection
 
 
 # Training function
@@ -493,8 +666,23 @@ def train(
     log_interval=20,
     eval_interval=50,
     steps_per_update=STEPS_PER_UPDATE,
+    logger=None,
 ):
-    print("Starting training...")
+    # Initialize logger if not provided
+    if logger is None:
+        logger = setup_logger()
+
+    logger.info("Starting training...")
+    logger.info(f"Device: {device_name}")
+    logger.info(f"Max episodes: {max_episodes}, Target reward: {target_reward}")
+    logger.info(f"Environment: {env.spec.id}")
+    logger.info(f"Steps per update: {steps_per_update}, PPO epochs: {agent.epochs}")
+    logger.info(
+        f"Learning rate: {agent.optimizer.param_groups[0]['lr']}, Gamma: {agent.gamma}, Lambda: {agent.lam}"
+    )
+    logger.info(
+        f"Clip epsilon: {agent.eps_clip}, Value coef: {agent.value_coef}, Entropy coef: {agent.entropy_coef}"
+    )
 
     # For tracking progress
     rewards = []  # Evaluation rewards
@@ -503,6 +691,17 @@ def train(
     training_episodes = []  # To track episode numbers for plotting
     eval_episodes = [0]  # To track episode numbers for evaluations
     best_avg_reward = -float("inf")
+
+    # For storing metrics
+    metrics_history = {
+        "episode_rewards": [],
+        "eval_rewards": [],
+        "avg_eval_rewards": [],
+        "policy_updates": [],
+        "episode_numbers": [],
+        "eval_episode_numbers": [],
+        "timestamps": [],
+    }
 
     # For early stopping
     solved = False
@@ -515,14 +714,20 @@ def train(
     artifacts_dir = ensure_artifacts_dir()
 
     # Do initial evaluation
+    logger.info("Performing initial evaluation...")
     eval_reward = evaluate(env, agent, num_episodes=5)
     rewards.append(eval_reward)
     avg_rewards.append(eval_reward)
-    print(f"Initial evaluation: Average Reward over 5 episodes: {eval_reward:.2f}")
+    metrics_history["eval_rewards"].append(eval_reward)
+    metrics_history["avg_eval_rewards"].append(eval_reward)
+    metrics_history["eval_episode_numbers"].append(0)
+    metrics_history["timestamps"].append(0)
+    logger.info(f"initial_eval reward={eval_reward:.2f}")
 
     while episode_num < max_episodes:
         # Collect a batch of transitions
         steps_collected = 0
+        update_start_time = time.time()
 
         while steps_collected < steps_per_update and episode_num < max_episodes:
             episode_num += 1
@@ -533,10 +738,11 @@ def train(
 
             episode_reward = 0
             done = False
+            episode_steps = 0
 
             while not done and steps_collected < steps_per_update:
                 # Select action with normalized state
-                action, log_prob, value, normalized_state = agent.select_action(state)
+                action, pre_tanh_action, log_prob, value = agent.select_action(state)
 
                 # Take action
                 next_state, reward, terminated, truncated, _ = env.step(action)
@@ -545,9 +751,16 @@ def train(
                 # Flatten next_state from (N, F) to (N*F,)
                 next_state = next_state.reshape(-1)
 
-                # Store in memory (using normalized state instead of raw state)
+                # Store in memory (using normalized state and both action forms)
                 agent.memory.store(
-                    normalized_state, action, reward, next_state, log_prob, done, value
+                    state,
+                    action,
+                    pre_tanh_action,
+                    reward,
+                    next_state,
+                    log_prob,
+                    done,
+                    value,
                 )
 
                 # Update state and reward
@@ -555,6 +768,7 @@ def train(
                 episode_reward += reward
                 steps_collected += 1
                 total_steps += 1
+                episode_steps += 1
 
                 # If we've collected enough steps or episode is done, we can stop
                 if steps_collected >= steps_per_update:
@@ -563,20 +777,30 @@ def train(
             # Record the completed episode's reward and episode number
             episode_rewards.append(episode_reward)
             training_episodes.append(episode_num)
+            metrics_history["episode_rewards"].append(episode_reward)
+            metrics_history["episode_numbers"].append(episode_num)
 
             # Log episode info based on log_interval
             if episode_num % log_interval == 0:
                 avg_ep_reward = np.mean(episode_rewards[-log_interval:])
                 elapsed_time = time.time() - start_time
-                print(
-                    f"Episode {episode_num} | Avg Episode Reward: {avg_ep_reward:.2f} | Steps: {total_steps} | Time: {elapsed_time:.2f}s"
+                logger.info(
+                    "episode=%d reward=%.2f avg_reward=%.2f steps=%d episode_steps=%d time=%.2fs",
+                    episode_num,
+                    episode_reward,
+                    avg_ep_reward,
+                    total_steps,
+                    episode_steps,
+                    elapsed_time,
                 )
 
             # Check for evaluation based on eval_interval - do it here to ensure evaluations happen exactly every eval_interval episodes
             if episode_num % eval_interval == 0:
+                logger.info(f"Evaluating at episode {episode_num}...")
                 eval_reward = evaluate(env, agent, num_episodes=5)
                 rewards.append(eval_reward)
                 eval_episodes.append(episode_num)
+                eval_time = time.time() - start_time
 
                 # Calculate average reward from last 10 evaluations
                 avg_reward = (
@@ -584,13 +808,23 @@ def train(
                 )
                 avg_rewards.append(avg_reward)
 
-                print(
-                    f"\nEvaluation at episode {episode_num}: Average Reward over 5 episodes: {eval_reward:.2f}\n"
+                # Store in metrics
+                metrics_history["eval_rewards"].append(eval_reward)
+                metrics_history["avg_eval_rewards"].append(avg_reward)
+                metrics_history["eval_episode_numbers"].append(episode_num)
+                metrics_history["timestamps"].append(eval_time)
+
+                logger.info(
+                    "eval episode=%d reward=%.2f avg_reward=%.2f time=%.2fs",
+                    episode_num,
+                    eval_reward,
+                    avg_reward,
+                    eval_time,
                 )
 
                 # Check if environment is solved
                 if avg_reward >= target_reward and not solved and len(rewards) >= 10:
-                    print(
+                    logger.info(
                         f"Environment solved in {episode_num} episodes! Average reward: {avg_reward:.2f}"
                     )
                     # Save the model
@@ -601,6 +835,9 @@ def train(
                 if avg_reward > best_avg_reward:
                     best_avg_reward = avg_reward
                     agent.save("ppo_highway_best.pth")
+                    logger.info(
+                        f"New best model saved with average reward: {best_avg_reward:.2f}"
+                    )
 
             # Only break outer loop if we've collected enough steps
             if steps_collected >= steps_per_update:
@@ -610,13 +847,32 @@ def train(
         final_value = 0.0
         if not done:  # If we stopped collection mid-episode
             with torch.no_grad():
-                normalized_final_state = agent.normalizer.normalize(state)
                 # Fix: Properly unpack three values (mean, std, value) from forward method
-                _, _, final_value = agent.actor_critic(normalized_final_state)
+                _, _, final_value = agent.actor_critic(state)
                 final_value = final_value.cpu().item()
 
         # Update policy with proper bootstrapping after collecting full batch
-        agent.update(last_value=final_value)
+        logger.info(f"Updating policy after collecting {steps_collected} steps...")
+        update_metrics = agent.update(last_value=final_value)
+        update_time = time.time() - update_start_time
+
+        # Store policy update metrics
+        metrics_history["policy_updates"].append(
+            {
+                "episode": episode_num,
+                "steps_collected": steps_collected,
+                "time": update_time,
+                **update_metrics,
+            }
+        )
+
+        logger.info(f"Policy update completed in {update_time:.2f}s")
+
+    # Save training metrics to JSON file
+    metrics_path = os.path.join(artifacts_dir, "training_metrics.json")
+    with open(metrics_path, "w") as f:
+        json.dump(metrics_history, f, indent=2)
+    logger.info(f"Training metrics saved to {metrics_path}")
 
     # Plot rewards
     plt.figure(figsize=(12, 8))
@@ -674,10 +930,30 @@ def train(
     plot_path = os.path.join(artifacts_dir, "ppo_highway_rewards.png")
     plt.savefig(plot_path)
     plt.close()
-    print(f"Training plot saved to {plot_path}")
+    logger.info(f"Training plot saved to {plot_path}")
 
-    print("Training completed!")
-    return rewards, avg_rewards
+    # Create CSV summary for this run
+    csv_path = os.path.join(artifacts_dir, f"summary_{experiment_name}.csv")
+    with open(csv_path, "w") as f:
+        f.write(
+            "experiment,final_reward,max_reward,training_steps,best_model_path,plot_path\n"
+        )
+        f.write(
+            f"{experiment_name},{avg_rewards[-1]:.4f},{max(avg_rewards):.4f},{total_steps},"
+        )
+        f.write(
+            f"{os.path.join(artifacts_dir, f'ppo_highway_best_{experiment_name}.pth')},"
+        )
+        f.write(f"{plot_path}\n")
+
+    # Also update metrics_history to include artifact paths
+    metrics_history["best_model_path"] = os.path.join(
+        artifacts_dir, f"ppo_highway_best_{experiment_name}.pth"
+    )
+    metrics_history["plot_path"] = plot_path
+
+    logger.info("Training completed!")
+    return rewards, avg_rewards, metrics_history
 
 
 # Evaluation function
@@ -715,8 +991,11 @@ def evaluate(env, agent, num_episodes=10, render=False):
 
 
 # Function to visualize a trained agent
-def visualize_agent(env, agent, num_episodes=3):
-    print("Visualizing agent...")
+def visualize_agent(env, agent, num_episodes=3, logger=None):
+    if logger is None:
+        logger = logging.getLogger("ppo_highway")
+
+    logger.info("Visualizing agent...")
 
     # Create visualization environment once with render mode
     env_viz = gym.make("highway-v0", render_mode="human", config=HIGHWAY_CONFIG)
@@ -746,7 +1025,7 @@ def visualize_agent(env, agent, num_episodes=3):
                 state = next_state
                 episode_reward += reward
 
-            print(f"Episode {episode + 1}: Reward = {episode_reward:.2f}")
+            logger.info("viz_episode=%d reward=%.2f", episode + 1, episode_reward)
 
     finally:
         # Ensure environment is closed even if an exception occurs
@@ -762,14 +1041,24 @@ def main():
     state_dim = np.prod(env.observation_space.shape)
     action_dim = env.action_space.shape[0]
 
-    print(f"State dimension: {state_dim}")
-    print(f"Action dimension: {action_dim}")
+    # Setup master logger
+    master_logger = setup_master_logger()
+    master_logger.info(f"Starting Highway-Env PPO Training")
+    master_logger.info(f"Using {device_name} for training")
+    master_logger.info(f"State dimension: {state_dim}")
+    master_logger.info(f"Action dimension: {action_dim}")
 
     # Flag to run a single training session instead of hyperparameter sweep
     run_single = True
 
     if run_single:
-        print("\n=== Running Single Training Session ===")
+        master_logger.info("\n=== Running Single Training Session ===")
+
+        # Create experiment logger for the single run
+        experiment_logger = setup_experiment_logger(
+            "single_run", console_level=logging.INFO
+        )
+
         # Create agent with default parameters
         agent = PPOAgent(
             state_dim=state_dim,
@@ -784,10 +1073,11 @@ def main():
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
             hidden_dim=HIDDEN_DIM,
+            logger=experiment_logger,
         )
 
         # Train the agent
-        rewards, avg_rewards = train(
+        rewards, avg_rewards, metrics_history = train(
             env=env,
             agent=agent,
             max_episodes=300,  # Shorter run for testing
@@ -795,17 +1085,25 @@ def main():
             log_interval=LOG_INTERVAL,
             eval_interval=EVAL_INTERVAL,
             steps_per_update=STEPS_PER_UPDATE,
+            logger=experiment_logger,
+        )
+
+        # Log final results to master logger
+        master_logger.info(
+            f"Single run completed with final reward: {avg_rewards[-1]:.2f}"
         )
 
         # Visualize the trained agent
+        experiment_logger.info("Visualizing trained agent...")
         viz_env = gym.make("highway-v0", config=HIGHWAY_CONFIG, render_mode="human")
-        visualize_agent(viz_env, agent, num_episodes=3)
+        visualize_agent(viz_env, agent, num_episodes=3, logger=experiment_logger)
         viz_env.close()
 
         # Close the training environment
         env.close()
     else:
         # Run experiments with different hyperparameter values in parallel
+        master_logger.info("Running hyperparameter experiments in parallel")
         # Set n_jobs to control parallelism: -1 means all cores, 2 means 2 workers, etc.
         run_experiments(
             env=env,
@@ -829,13 +1127,17 @@ def main():
                 ],
             },
             n_jobs=4,  # Adjust based on your CPU cores and memory
+            logger=master_logger,
         )
 
+    master_logger.info("All experiments completed successfully!")
     # No need to close environment as it's already closed in run_experiments
 
 
 # Function to run experiments with different hyperparameters
-def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
+def run_experiments(
+    env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1, logger=None
+):
     """
     Run multiple experiments with different hyperparameter values in parallel.
 
@@ -845,7 +1147,11 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
         action_dim: Action dimension
         hyperparams_to_vary: Dict mapping hyperparameter names to lists of values to try
         n_jobs: Number of parallel jobs to run (-1 for all available cores)
+        logger: Master logger instance for logging (should be created in the main process)
     """
+    # Initialize master logger if not provided
+    master_logger = logger or setup_master_logger()
+
     # Default hyperparameters
     default_hyperparams = {
         "state_dim": state_dim,
@@ -871,7 +1177,7 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
     )
 
     total_experiments = len(param_values)
-    print(
+    master_logger.info(
         f"\nRunning {total_experiments} experiments with varying {', '.join(param_names)} using {n_jobs} parallel workers.\n"
     )
 
@@ -885,6 +1191,12 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
 
         param_desc = []
         feature_set = None
+
+        # Create unique experiment ID
+        experiment_id = f"exp_{experiment_idx}"
+
+        # Create experiment logger - only warnings and errors go to console
+        experiment_logger = setup_experiment_logger(experiment_id)
 
         # First, extract any special hyperparameters like "features"
         for name, value in zip(param_names, values):
@@ -925,21 +1237,21 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
                 param_desc.append(f"{name}={value}")
 
         experiment_name = "_".join(param_desc)
-        print(
+        experiment_logger.info(
             f"\n=== Starting Experiment {experiment_idx + 1}/{total_experiments}: {experiment_name} ===\n"
         )
-        print(
+        experiment_logger.info(
             f"State dimension: {worker_state_dim}, Action dimension: {worker_action_dim}"
         )
 
         if feature_set is not None:
-            print(f"Using features: {feature_set}")
+            experiment_logger.info(f"Using features: {feature_set}")
 
         # Create agent with these hyperparameters
-        agent = PPOAgent(**experiment_hyperparams)
+        agent = PPOAgent(**experiment_hyperparams, logger=experiment_logger)
 
         # Train agent with modified model saving to include hyperparameter values
-        rewards, avg_rewards = train_with_experiment_name(
+        rewards, avg_rewards, metrics_history = train_with_experiment_name(
             env=worker_env,
             agent=agent,
             max_episodes=MAX_EPISODES,
@@ -948,10 +1260,19 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
             eval_interval=EVAL_INTERVAL,
             steps_per_update=STEPS_PER_UPDATE,
             experiment_name=experiment_name,
+            logger=experiment_logger,
         )
 
-        # Disable visualization during parallel training as it can cause issues
-        # If visualization is needed, it can be done after all experiments complete
+        # Log completion to experiment logger
+        experiment_logger.info(
+            f"Experiment {experiment_idx + 1}/{total_experiments} completed. "
+            f"Final avg reward: {avg_rewards[-1]:.2f}, Max avg reward: {max(avg_rewards):.2f}"
+        )
+
+        # Log a warning-level message that will appear in the console
+        experiment_logger.warning(
+            f"Experiment {experiment_name} completed! Final reward: {avg_rewards[-1]:.2f}"
+        )
 
         # Close the worker environment
         worker_env.close()
@@ -959,15 +1280,18 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
         # Return the results for this experiment
         return {
             "experiment_name": experiment_name,
+            "experiment_id": experiment_id,
             "hyperparams": experiment_hyperparams.copy(),
             "features": feature_set,  # Store the feature set used
             "final_avg_reward": avg_rewards[-1],
             "max_avg_reward": max(avg_rewards),
             "rewards": rewards,
             "avg_rewards": avg_rewards,
+            "metrics_history": metrics_history,
         }
 
     # Run experiments in parallel
+    master_logger.info("Starting parallel experiments...")
     results = Parallel(n_jobs=n_jobs, verbose=10)(
         delayed(run_single_experiment)(i, values)
         for i, values in enumerate(param_values)
@@ -976,19 +1300,32 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
     # Convert results list to dictionary
     experiment_results = {result["experiment_name"]: result for result in results}
 
+    # Summarize results in master logger
+    master_logger.info("\n=== Experiment Results Summary ===")
+    master_logger.info("experiment_name final_reward max_reward")
+    master_logger.info("-" * 70)
+
+    for exp_name, results in experiment_results.items():
+        master_logger.info(
+            "exp=%s final_reward=%.2f max_reward=%.2f",
+            exp_name,
+            results["final_avg_reward"],
+            results["max_avg_reward"],
+        )
+
     # Visualize the best models after all experiments are done (optional)
     visualize_best_models = True
     if visualize_best_models:
-        print("\n=== Visualizing Best Models ===")
+        master_logger.info("\n=== Visualizing Best Models ===")
 
         for exp_name, result in experiment_results.items():
-            print(f"\nVisualizing agent for experiment: {exp_name}")
+            master_logger.info(f"\nVisualizing agent for experiment: {exp_name}")
 
             # Create a visualization environment with the correct feature set
             viz_config = copy.deepcopy(HIGHWAY_CONFIG)
             if result.get("features") is not None:
                 viz_config["observation"]["features"] = result["features"]
-                print(f"Using features: {result['features']}")
+                master_logger.info(f"Using features: {result['features']}")
 
             viz_env = gym.make("highway-v0", config=viz_config, render_mode="human")
 
@@ -1006,24 +1343,15 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
                     for k, v in result["hyperparams"].items()
                     if k not in ["state_dim", "action_dim"]
                 },
+                logger=master_logger,
             )
             agent.load(best_model_path)
 
             # Visualize
-            visualize_agent(viz_env, agent, num_episodes=1)
+            visualize_agent(viz_env, agent, num_episodes=1, logger=master_logger)
 
             # Close visualization environment after each experiment
             viz_env.close()
-
-    # Compare and display results
-    print("\n=== Experiment Results ===")
-    print(f"{'Experiment':<40} {'Final Reward':<15} {'Max Reward':<15}")
-    print("-" * 70)
-
-    for exp_name, results in experiment_results.items():
-        print(
-            f"{exp_name:<40} {results['final_avg_reward']:<15.2f} {results['max_avg_reward']:<15.2f}"
-        )
 
     # Plot comparison of learning curves
     plt.figure(figsize=(14, 10))
@@ -1049,7 +1377,54 @@ def run_experiments(env, state_dim, action_dim, hyperparams_to_vary, n_jobs=-1):
     comparison_plot_path = os.path.join(artifacts_dir, "hyperparameter_comparison.png")
     plt.savefig(comparison_plot_path)
     plt.close()
-    print(f"\nComparison plot saved to {comparison_plot_path}")
+    master_logger.info(f"\nComparison plot saved to {comparison_plot_path}")
+
+    # Save combined metrics to JSON
+    metrics_path = os.path.join(artifacts_dir, "all_experiments_metrics.json")
+    with open(metrics_path, "w") as f:
+        json.dump(
+            {
+                "experiments": {
+                    exp_name: {
+                        "hyperparams": results["hyperparams"],
+                        "features": results["features"],
+                        "final_avg_reward": results["final_avg_reward"],
+                        "max_avg_reward": results["max_avg_reward"],
+                    }
+                    for exp_name, results in experiment_results.items()
+                }
+            },
+            f,
+            indent=2,
+        )
+    master_logger.info(f"Combined experiment metrics saved to {metrics_path}")
+
+    # Create a master CSV with results from all experiments
+    master_csv_path = os.path.join(artifacts_dir, "all_experiments_summary.csv")
+    with open(master_csv_path, "w") as f:
+        # Write header with all possible hyperparameters
+        f.write("experiment_name,final_reward,max_reward,")
+        f.write(",".join(default_hyperparams.keys()))
+        f.write(",plot_path,best_model_path\n")
+
+        # Write one row per experiment
+        for exp_name, results in experiment_results.items():
+            f.write(
+                f"{exp_name},{results['final_avg_reward']:.4f},{results['max_avg_reward']:.4f},"
+            )
+            # Write hyperparameter values
+            for param, default in default_hyperparams.items():
+                if param in results["hyperparams"]:
+                    f.write(f"{results['hyperparams'][param]},")
+                else:
+                    f.write(f"{default},")
+            # Write paths
+            f.write(
+                f"{os.path.join(artifacts_dir, f'ppo_highway_rewards_{exp_name}.png')},"
+            )
+            f.write(
+                f"{os.path.join(artifacts_dir, f'ppo_highway_best_{exp_name}.pth')}\n"
+            )
 
     return experiment_results
 
@@ -1064,9 +1439,31 @@ def train_with_experiment_name(
     eval_interval=50,
     steps_per_update=STEPS_PER_UPDATE,
     experiment_name="",
+    logger=None,
 ):
     """Modified version of train() that includes experiment_name in saved artifacts"""
-    print(f"Starting training for experiment: {experiment_name}...")
+    # Initialize logger with experiment name if not provided
+    if logger is None:
+        logger = setup_experiment_logger(experiment_name)
+
+    # Use a consistent prefix for experiment logs
+    exp_prefix = f"[{experiment_name}]" if experiment_name else ""
+
+    logger.info(f"{exp_prefix} Starting training for experiment: {experiment_name}")
+    logger.info(f"{exp_prefix} Device: {device_name}")
+    logger.info(
+        f"{exp_prefix} Max episodes: {max_episodes}, Target reward: {target_reward}"
+    )
+    logger.info(f"{exp_prefix} Environment: {env.spec.id}")
+    logger.info(
+        f"{exp_prefix} Steps per update: {steps_per_update}, PPO epochs: {agent.epochs}"
+    )
+    logger.info(
+        f"{exp_prefix} Learning rate: {agent.optimizer.param_groups[0]['lr']}, Gamma: {agent.gamma}, Lambda: {agent.lam}"
+    )
+    logger.info(
+        f"{exp_prefix} Clip epsilon: {agent.eps_clip}, Value coef: {agent.value_coef}, Entropy coef: {agent.entropy_coef}"
+    )
 
     # For tracking progress
     rewards = []  # Evaluation rewards
@@ -1075,6 +1472,18 @@ def train_with_experiment_name(
     training_episodes = []  # To track episode numbers for plotting
     eval_episodes = [0]  # To track episode numbers for evaluations
     best_avg_reward = -float("inf")
+
+    # For storing metrics
+    metrics_history = {
+        "experiment_name": experiment_name,
+        "episode_rewards": [],
+        "eval_rewards": [],
+        "avg_eval_rewards": [],
+        "policy_updates": [],
+        "episode_numbers": [],
+        "eval_episode_numbers": [],
+        "timestamps": [],
+    }
 
     # For early stopping
     solved = False
@@ -1087,14 +1496,20 @@ def train_with_experiment_name(
     artifacts_dir = ensure_artifacts_dir()
 
     # Do initial evaluation
+    logger.info(f"{exp_prefix} Performing initial evaluation...")
     eval_reward = evaluate(env, agent, num_episodes=5)
     rewards.append(eval_reward)
     avg_rewards.append(eval_reward)
-    print(f"Initial evaluation: Average Reward over 5 episodes: {eval_reward:.2f}")
+    metrics_history["eval_rewards"].append(eval_reward)
+    metrics_history["avg_eval_rewards"].append(eval_reward)
+    metrics_history["eval_episode_numbers"].append(0)
+    metrics_history["timestamps"].append(0)
+    logger.info(f"{exp_prefix} initial_eval reward={eval_reward:.2f}")
 
     while episode_num < max_episodes:
         # Collect a batch of transitions
         steps_collected = 0
+        update_start_time = time.time()
 
         while steps_collected < steps_per_update and episode_num < max_episodes:
             episode_num += 1
@@ -1105,10 +1520,11 @@ def train_with_experiment_name(
 
             episode_reward = 0
             done = False
+            episode_steps = 0
 
             while not done and steps_collected < steps_per_update:
-                # Select action with normalized state
-                action, log_prob, value, normalized_state = agent.select_action(state)
+                # Select action with state
+                action, pre_tanh_action, log_prob, value = agent.select_action(state)
 
                 # Take action
                 next_state, reward, terminated, truncated, _ = env.step(action)
@@ -1117,9 +1533,16 @@ def train_with_experiment_name(
                 # Flatten next_state
                 next_state = next_state.reshape(-1)
 
-                # Store in memory (using normalized state instead of raw state)
+                # Store in memory (both action forms)
                 agent.memory.store(
-                    normalized_state, action, reward, next_state, log_prob, done, value
+                    state,
+                    action,
+                    pre_tanh_action,
+                    reward,
+                    next_state,
+                    log_prob,
+                    done,
+                    value,
                 )
 
                 # Update state and reward
@@ -1127,6 +1550,7 @@ def train_with_experiment_name(
                 episode_reward += reward
                 steps_collected += 1
                 total_steps += 1
+                episode_steps += 1
 
                 # If we've collected enough steps or episode is done, we can stop
                 if steps_collected >= steps_per_update:
@@ -1135,20 +1559,31 @@ def train_with_experiment_name(
             # Record the completed episode's reward and episode number
             episode_rewards.append(episode_reward)
             training_episodes.append(episode_num)
+            metrics_history["episode_rewards"].append(episode_reward)
+            metrics_history["episode_numbers"].append(episode_num)
 
             # Log episode info based on log_interval
             if episode_num % log_interval == 0:
                 avg_ep_reward = np.mean(episode_rewards[-log_interval:])
                 elapsed_time = time.time() - start_time
-                print(
-                    f"[{experiment_name}] Episode {episode_num} | Avg Episode Reward: {avg_ep_reward:.2f} | Steps: {total_steps} | Time: {elapsed_time:.2f}s"
+                logger.info(
+                    "%s episode=%d reward=%.2f avg_reward=%.2f steps=%d episode_steps=%d time=%.2fs",
+                    exp_prefix,
+                    episode_num,
+                    episode_reward,
+                    avg_ep_reward,
+                    total_steps,
+                    episode_steps,
+                    elapsed_time,
                 )
 
             # Check for evaluation based on eval_interval
             if episode_num % eval_interval == 0:
+                logger.info(f"{exp_prefix} Evaluating at episode {episode_num}...")
                 eval_reward = evaluate(env, agent, num_episodes=5)
                 rewards.append(eval_reward)
                 eval_episodes.append(episode_num)
+                eval_time = time.time() - start_time
 
                 # Calculate average reward from last 10 evaluations
                 avg_reward = (
@@ -1156,14 +1591,25 @@ def train_with_experiment_name(
                 )
                 avg_rewards.append(avg_reward)
 
-                print(
-                    f"\n[{experiment_name}] Evaluation at episode {episode_num}: Average Reward over 5 episodes: {eval_reward:.2f}\n"
+                # Store in metrics
+                metrics_history["eval_rewards"].append(eval_reward)
+                metrics_history["avg_eval_rewards"].append(avg_reward)
+                metrics_history["eval_episode_numbers"].append(episode_num)
+                metrics_history["timestamps"].append(eval_time)
+
+                logger.info(
+                    "%s eval episode=%d reward=%.2f avg_reward=%.2f time=%.2fs",
+                    exp_prefix,
+                    episode_num,
+                    eval_reward,
+                    avg_reward,
+                    eval_time,
                 )
 
                 # Check if environment is solved
                 if avg_reward >= target_reward and not solved and len(rewards) >= 10:
-                    print(
-                        f"[{experiment_name}] Environment solved in {episode_num} episodes! Average reward: {avg_reward:.2f}"
+                    logger.info(
+                        f"{exp_prefix} Environment solved in {episode_num} episodes! Average reward: {avg_reward:.2f}"
                     )
                     # Save the model with experiment name
                     agent.save(f"ppo_highway_solved_{experiment_name}.pth")
@@ -1173,6 +1619,9 @@ def train_with_experiment_name(
                 if avg_reward > best_avg_reward:
                     best_avg_reward = avg_reward
                     agent.save(f"ppo_highway_best_{experiment_name}.pth")
+                    logger.info(
+                        f"{exp_prefix} New best model saved with average reward: {best_avg_reward:.2f}"
+                    )
 
             # Only break outer loop if we've collected enough steps
             if steps_collected >= steps_per_update:
@@ -1182,13 +1631,36 @@ def train_with_experiment_name(
         final_value = 0.0
         if not done:  # If we stopped collection mid-episode
             with torch.no_grad():
-                normalized_final_state = agent.normalizer.normalize(state)
-                # Fix: Properly unpack three values (mean, std, value) from forward method
-                _, _, final_value = agent.actor_critic(normalized_final_state)
+                # Get final value directly from state
+                _, _, final_value = agent.actor_critic(state)
                 final_value = final_value.cpu().item()
 
         # Update policy with proper bootstrapping after collecting full batch
-        agent.update(last_value=final_value)
+        logger.info(
+            f"{exp_prefix} Updating policy after collecting {steps_collected} steps..."
+        )
+        update_metrics = agent.update(last_value=final_value)
+        update_time = time.time() - update_start_time
+
+        # Store policy update metrics
+        metrics_history["policy_updates"].append(
+            {
+                "episode": episode_num,
+                "steps_collected": steps_collected,
+                "time": update_time,
+                **update_metrics,
+            }
+        )
+
+        logger.info(f"{exp_prefix} Policy update completed in {update_time:.2f}s")
+
+    # Save training metrics to JSON file
+    metrics_path = os.path.join(
+        artifacts_dir, f"training_metrics_{experiment_name}.json"
+    )
+    with open(metrics_path, "w") as f:
+        json.dump(metrics_history, f, indent=2)
+    logger.info(f"{exp_prefix} Training metrics saved to {metrics_path}")
 
     # Plot rewards
     plt.figure(figsize=(12, 8))
@@ -1248,10 +1720,30 @@ def train_with_experiment_name(
     )
     plt.savefig(plot_path)
     plt.close()
-    print(f"Training plot saved to {plot_path}")
+    logger.info(f"{exp_prefix} Training plot saved to {plot_path}")
 
-    print(f"Training completed for experiment: {experiment_name}!")
-    return rewards, avg_rewards
+    # Create CSV summary for this run
+    csv_path = os.path.join(artifacts_dir, f"summary_{experiment_name}.csv")
+    with open(csv_path, "w") as f:
+        f.write(
+            "experiment,final_reward,max_reward,training_steps,best_model_path,plot_path\n"
+        )
+        f.write(
+            f"{experiment_name},{avg_rewards[-1]:.4f},{max(avg_rewards):.4f},{total_steps},"
+        )
+        f.write(
+            f"{os.path.join(artifacts_dir, f'ppo_highway_best_{experiment_name}.pth')},"
+        )
+        f.write(f"{plot_path}\n")
+
+    # Also update metrics_history to include artifact paths
+    metrics_history["best_model_path"] = os.path.join(
+        artifacts_dir, f"ppo_highway_best_{experiment_name}.pth"
+    )
+    metrics_history["plot_path"] = plot_path
+
+    logger.info(f"{exp_prefix} Training completed!")
+    return rewards, avg_rewards, metrics_history
 
 
 if __name__ == "__main__":
