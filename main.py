@@ -1050,7 +1050,7 @@ def main():
     master_logger.info(f"Action dimension: {action_dim}")
 
     # Flag to run a single training session instead of hyperparameter sweep
-    run_single = True
+    run_single = False
 
     if run_single:
         master_logger.info("\n=== Running Single Training Session ===")
@@ -1113,8 +1113,8 @@ def main():
             action_dim=action_dim,
             hyperparams_to_vary={
                 "epochs": [4, 6],
-                "lr": [1e-4, 3e-4],
-                "hidden_dim": [64, 128],
+                "lr": [1e-4, 2e-4, 3e-4],
+                "hidden_dim": [32, 64, 128, 256],
                 "features": [
                     ["x", "y", "vx", "vy"],  # Basic features
                     ["presence", "x", "y", "vx", "vy"],  # With vehicle presence
@@ -1127,8 +1127,9 @@ def main():
                         "sin_h",
                     ],  # With heading information
                 ],
+                "batch_size": [32, 64, 128, 256],
             },
-            n_jobs=4,  # Adjust based on your CPU cores and memory
+            n_jobs=42,  # Adjust based on your CPU cores and memory
             logger=master_logger,
         )
 
