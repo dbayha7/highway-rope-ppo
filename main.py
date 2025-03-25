@@ -151,7 +151,7 @@ STEPS_PER_UPDATE = (
 )
 
 # Training parameters
-MAX_EPISODES = 1050  # Maximum number of episodes to train
+MAX_EPISODES = 1500  # Maximum number of episodes to train
 TARGET_REWARD = (
     0.0  # Target reward to consider environment solved (adjusted for highway-env)
 )
@@ -667,6 +667,7 @@ def train(
     eval_interval=50,
     steps_per_update=STEPS_PER_UPDATE,
     logger=None,
+    experiment_name="",
 ):
     # Initialize logger if not provided
     if logger is None:
@@ -852,7 +853,7 @@ def train(
                 final_value = final_value.cpu().item()
 
         # Update policy with proper bootstrapping after collecting full batch
-        logger.info(f"Updating policy after collecting {steps_collected} steps...")
+        logger.debug(f"Updating policy after collecting {steps_collected} steps...")
         update_metrics = agent.update(last_value=final_value)
         update_time = time.time() - update_start_time
 
@@ -866,7 +867,7 @@ def train(
             }
         )
 
-        logger.info(f"Policy update completed in {update_time:.2f}s")
+        logger.debug(f"Policy update completed in {update_time:.2f}s")
 
     # Save training metrics to JSON file
     metrics_path = os.path.join(artifacts_dir, "training_metrics.json")
@@ -1086,6 +1087,7 @@ def main():
             eval_interval=EVAL_INTERVAL,
             steps_per_update=STEPS_PER_UPDATE,
             logger=experiment_logger,
+            experiment_name="single_run",
         )
 
         # Log final results to master logger
@@ -1636,9 +1638,7 @@ def train_with_experiment_name(
                 final_value = final_value.cpu().item()
 
         # Update policy with proper bootstrapping after collecting full batch
-        logger.info(
-            f"{exp_prefix} Updating policy after collecting {steps_collected} steps..."
-        )
+        logger.debug(f"Updating policy after collecting {steps_collected} steps...")
         update_metrics = agent.update(last_value=final_value)
         update_time = time.time() - update_start_time
 
@@ -1652,7 +1652,7 @@ def train_with_experiment_name(
             }
         )
 
-        logger.info(f"{exp_prefix} Policy update completed in {update_time:.2f}s")
+        logger.debug(f"Policy update completed in {update_time:.2f}s")
 
     # Save training metrics to JSON file
     metrics_path = os.path.join(
@@ -1744,6 +1744,14 @@ def train_with_experiment_name(
 
     logger.info(f"{exp_prefix} Training completed!")
     return rewards, avg_rewards, metrics_history
+
+
+def safe_log_prob(pre_tanh_action, action):
+    # More robust version with clipping
+    correction = torch.log(1 - action.pow(2) + 1e-6)
+    # Add clipping to avoid extreme values
+    correction = torch.clamp(correction, min=-20.0)
+    return correction
 
 
 if __name__ == "__main__":

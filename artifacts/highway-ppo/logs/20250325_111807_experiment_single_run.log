@@ -1,0 +1,72 @@
+2025-03-25 11:18:07,290 | INFO | Experiment logger initialized for experiment_single_run. Log file: artifacts/highway-ppo/logs/20250325_111807_experiment_single_run.log
+2025-03-25 11:18:07,914 | INFO | Starting training...
+2025-03-25 11:18:07,915 | INFO | Device: Apple Silicon GPU
+2025-03-25 11:18:07,915 | INFO | Max episodes: 300, Target reward: 0.0
+2025-03-25 11:18:07,915 | INFO | Environment: highway-v0
+2025-03-25 11:18:07,915 | INFO | Steps per update: 2048, PPO epochs: 6
+2025-03-25 11:18:07,915 | INFO | Learning rate: 0.0001, Gamma: 0.99, Lambda: 0.95
+2025-03-25 11:18:07,915 | INFO | Clip epsilon: 0.2, Value coef: 0.5, Entropy coef: 0.005
+2025-03-25 11:18:07,915 | INFO | Performing initial evaluation...
+2025-03-25 11:18:30,141 | INFO | initial_eval reward=6.35
+2025-03-25 11:19:28,428 | INFO | episode=10 reward=5.66 avg_reward=9.77 steps=1628 episode_steps=13 time=80.51s
+2025-03-25 11:19:44,208 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:19:47,326 | INFO | update_complete loss=1.2436 policy_loss=-0.0019 value_loss=2.5195 entropy=2.8382 clip_frac=0.008 kl=0.00125 explained_var=-0.000
+2025-03-25 11:19:47,328 | INFO | Policy update completed in 77.19s
+2025-03-25 11:20:31,691 | INFO | episode=20 reward=2.34 avg_reward=6.58 steps=3268 episode_steps=200 time=143.78s
+2025-03-25 11:21:02,397 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:21:04,878 | INFO | update_complete loss=0.7248 policy_loss=-0.0016 value_loss=1.4812 entropy=2.8379 clip_frac=0.004 kl=0.00078 explained_var=0.064
+2025-03-25 11:21:04,881 | INFO | Policy update completed in 77.55s
+2025-03-25 11:21:33,602 | INFO | episode=30 reward=22.77 avg_reward=11.16 steps=4896 episode_steps=200 time=205.69s
+2025-03-25 11:22:19,236 | INFO | episode=40 reward=0.82 avg_reward=6.47 steps=6144 episode_steps=11 time=251.32s
+2025-03-25 11:22:19,238 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:22:21,632 | INFO | update_complete loss=1.0249 policy_loss=-0.0044 value_loss=2.0870 entropy=2.8362 clip_frac=0.025 kl=0.00249 explained_var=0.174
+2025-03-25 11:22:21,634 | INFO | Policy update completed in 76.75s
+2025-03-25 11:23:28,465 | INFO | episode=50 reward=1.37 avg_reward=5.75 steps=7951 episode_steps=200 time=320.55s
+2025-03-25 11:23:28,465 | INFO | Evaluating at episode 50...
+2025-03-25 11:24:03,176 | INFO | eval episode=50 reward=3.09 avg_reward=4.72 time=355.26s
+2025-03-25 11:24:03,191 | INFO | model_saved path=artifacts/highway-ppo/ppo_highway_best.pth
+2025-03-25 11:24:03,191 | INFO | New best model saved with average reward: 4.72
+2025-03-25 11:24:11,715 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:24:14,204 | INFO | update_complete loss=0.4185 policy_loss=-0.0056 value_loss=0.8766 entropy=2.8360 clip_frac=0.010 kl=0.00134 explained_var=0.492
+2025-03-25 11:24:14,207 | INFO | Policy update completed in 112.57s
+2025-03-25 11:24:47,612 | INFO | episode=60 reward=7.40 avg_reward=8.19 steps=9083 episode_steps=33 time=399.70s
+2025-03-25 11:25:29,673 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:25:32,190 | INFO | update_complete loss=0.8709 policy_loss=-0.0058 value_loss=1.7818 entropy=2.8391 clip_frac=0.033 kl=0.00285 explained_var=0.433
+2025-03-25 11:25:32,193 | INFO | Policy update completed in 77.99s
+2025-03-25 11:25:39,242 | INFO | episode=70 reward=12.11 avg_reward=9.78 steps=10440 episode_steps=200 time=451.33s
+2025-03-25 11:26:20,352 | INFO | episode=80 reward=15.73 avg_reward=6.92 steps=11582 episode_steps=200 time=492.44s
+2025-03-25 11:26:45,950 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:26:48,374 | INFO | update_complete loss=2.7566 policy_loss=-0.0075 value_loss=5.5566 entropy=2.8391 clip_frac=0.049 kl=0.00403 explained_var=0.438
+2025-03-25 11:26:48,377 | INFO | Policy update completed in 76.18s
+2025-03-25 11:27:03,593 | INFO | episode=90 reward=14.87 avg_reward=20.46 steps=12723 episode_steps=200 time=535.68s
+2025-03-25 11:27:54,091 | INFO | episode=100 reward=49.08 avg_reward=13.55 steps=14171 episode_steps=200 time=586.18s
+2025-03-25 11:27:54,091 | INFO | Evaluating at episode 100...
+2025-03-25 11:28:02,680 | INFO | eval episode=100 reward=12.38 avg_reward=7.27 time=594.77s
+2025-03-25 11:28:02,693 | INFO | model_saved path=artifacts/highway-ppo/ppo_highway_best.pth
+2025-03-25 11:28:02,693 | INFO | New best model saved with average reward: 7.27
+2025-03-25 11:28:08,736 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:28:11,226 | INFO | update_complete loss=2.0279 policy_loss=-0.0033 value_loss=4.0908 entropy=2.8366 clip_frac=0.021 kl=0.00217 explained_var=0.629
+2025-03-25 11:28:11,229 | INFO | Policy update completed in 82.85s
+2025-03-25 11:28:46,473 | INFO | episode=110 reward=52.62 avg_reward=19.54 steps=15299 episode_steps=200 time=638.56s
+2025-03-25 11:29:25,650 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:29:28,220 | INFO | update_complete loss=4.3517 policy_loss=-0.0045 value_loss=8.7408 entropy=2.8351 clip_frac=0.031 kl=0.00308 explained_var=0.562
+2025-03-25 11:29:28,223 | INFO | Policy update completed in 76.99s
+2025-03-25 11:29:28,752 | INFO | episode=120 reward=7.32 avg_reward=22.23 steps=16399 episode_steps=15 time=680.84s
+2025-03-25 11:30:21,381 | INFO | episode=130 reward=12.99 avg_reward=15.82 steps=17846 episode_steps=200 time=733.47s
+2025-03-25 11:30:42,468 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:30:45,271 | INFO | update_complete loss=2.6510 policy_loss=-0.0017 value_loss=5.3337 entropy=2.8354 clip_frac=0.004 kl=0.00096 explained_var=0.627
+2025-03-25 11:30:45,274 | INFO | Policy update completed in 77.05s
+2025-03-25 11:31:30,268 | INFO | episode=140 reward=12.53 avg_reward=24.15 steps=19632 episode_steps=200 time=802.35s
+2025-03-25 11:32:02,075 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:32:04,891 | INFO | update_complete loss=2.7517 policy_loss=-0.0039 value_loss=5.5397 entropy=2.8356 clip_frac=0.019 kl=0.00213 explained_var=0.703
+2025-03-25 11:32:04,893 | INFO | Policy update completed in 79.62s
+2025-03-25 11:32:27,617 | INFO | episode=150 reward=33.47 avg_reward=19.01 steps=21080 episode_steps=200 time=859.70s
+2025-03-25 11:32:27,617 | INFO | Evaluating at episode 150...
+2025-03-25 11:32:36,918 | INFO | eval episode=150 reward=14.93 avg_reward=9.19 time=869.00s
+2025-03-25 11:32:36,931 | INFO | model_saved path=artifacts/highway-ppo/ppo_highway_best.pth
+2025-03-25 11:32:36,931 | INFO | New best model saved with average reward: 9.19
+2025-03-25 11:33:31,571 | INFO | episode=160 reward=4.22 avg_reward=22.33 steps=22528 episode_steps=27 time=923.66s
+2025-03-25 11:33:31,573 | INFO | Updating policy after collecting 2048 steps...
+2025-03-25 11:33:34,242 | INFO | update_complete loss=3.7701 policy_loss=-0.0053 value_loss=7.5791 entropy=2.8350 clip_frac=0.025 kl=0.00278 explained_var=0.736
+2025-03-25 11:33:34,244 | INFO | Policy update completed in 89.35s
+2025-03-25 11:34:17,761 | INFO | episode=170 reward=26.67 avg_reward=22.08 steps=23673 episode_steps=200 time=969.85s
