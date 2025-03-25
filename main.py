@@ -16,7 +16,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from joblib import Parallel, delayed
-from highway_env import _register_highway_envs
+import highway_env
 
 # At the top with other constants
 ARTIFACTS_DIR = os.path.join("artifacts", "highway-ppo")
@@ -126,7 +126,7 @@ def setup_logger(experiment_name="", log_level=logging.INFO):
 
 # if highway_env is not registered, register it
 if "highway-v0" not in gym.envs.registry:
-    _register_highway_envs()
+    highway_env._register_highway_envs()
 
 # This implementation uses highway-env's built-in observation normalization
 # By setting "normalize": True in the environment config, observations are
@@ -998,6 +998,11 @@ def visualize_agent(env, agent, num_episodes=3, logger=None):
 
     logger.info("Visualizing agent...")
 
+    # Register highway environment
+    if "highway-v0" not in gym.envs.registry:
+        highway_env._register_highway_envs()
+    logger.info("Registered highway-env in visualization process")
+
     # Create visualization environment once with render mode
     env_viz = gym.make("highway-v0", render_mode="human", config=HIGHWAY_CONFIG)
 
@@ -1097,6 +1102,11 @@ def main():
 
         # Visualize the trained agent
         experiment_logger.info("Visualizing trained agent...")
+        # Register highway environment
+        if "highway-v0" not in gym.envs.registry:
+            highway_env._register_highway_envs()
+            experiment_logger.info("Registered highway-env for visualization")
+
         viz_env = gym.make("highway-v0", config=HIGHWAY_CONFIG, render_mode="human")
         visualize_agent(viz_env, agent, num_episodes=3, logger=experiment_logger)
         viz_env.close()
@@ -1129,7 +1139,7 @@ def main():
                 ],
                 "batch_size": [32, 64, 128],
             },
-            n_jobs=42,  # Adjust based on your CPU cores and memory
+            n_jobs=4,  # Adjust based on your CPU cores and memory
             logger=master_logger,
         )
 
@@ -1213,6 +1223,11 @@ def run_experiments(
         # Update the config with the feature set if provided
         if feature_set is not None:
             local_config["observation"]["features"] = feature_set
+
+        # Register highway environment
+        if "highway-v0" not in gym.envs.registry:
+            highway_env._register_highway_envs()
+            experiment_logger.info("Registered highway-env in worker process")
 
         # Create a new environment for this worker with the potentially modified config
         worker_env = gym.make("highway-v0", config=local_config)
@@ -1329,6 +1344,10 @@ def run_experiments(
             if result.get("features") is not None:
                 viz_config["observation"]["features"] = result["features"]
                 master_logger.info(f"Using features: {result['features']}")
+
+            # Register highway environment
+            if "highway-v0" not in gym.envs.registry:
+                highway_env._register_highway_envs()
 
             viz_env = gym.make("highway-v0", config=viz_config, render_mode="human")
 
