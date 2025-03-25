@@ -1139,7 +1139,7 @@ def main():
                 ],
                 "batch_size": [32, 64, 128],
             },
-            n_jobs=4,  # Adjust based on your CPU cores and memory
+            n_jobs=42,  # Adjust based on your CPU cores and memory
             logger=master_logger,
         )
 
