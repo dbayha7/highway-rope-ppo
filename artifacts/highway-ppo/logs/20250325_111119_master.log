@@ -1,7 +1,0 @@
-2025-03-25 11:11:19,048 | INFO | Master logger initialized. Log file: artifacts/highway-ppo/logs/20250325_111119_master.log
-2025-03-25 11:11:19,048 | INFO | Starting Highway-Env PPO Training
-2025-03-25 11:11:19,048 | INFO | Using Apple Silicon GPU for training
-2025-03-25 11:11:19,048 | INFO | State dimension: 60
-2025-03-25 11:11:19,048 | INFO | Action dimension: 2
-2025-03-25 11:11:19,048 | INFO | 
-=== Running Single Training Session ===
