@@ -153,7 +153,7 @@ STEPS_PER_UPDATE = (
 # Training parameters
 MAX_EPISODES = 1500  # Maximum number of episodes to train
 TARGET_REWARD = (
-    0.0  # Target reward to consider environment solved (adjusted for highway-env)
+    20.0  # Target reward to consider environment solved (adjusted for highway-env)
 )
 LOG_INTERVAL = 10  # How often to log training progress
 EVAL_INTERVAL = 50  # How often to run evaluation
@@ -1112,9 +1112,9 @@ def main():
             state_dim=state_dim,
             action_dim=action_dim,
             hyperparams_to_vary={
-                "epochs": [4, 6],
-                "lr": [1e-4, 2e-4, 3e-4],
-                "hidden_dim": [32, 64, 128, 256],
+                "epochs": [4, 6, 8],
+                "lr": [1e-4, 3e-4],
+                "hidden_dim": [64, 128, 256],
                 "features": [
                     ["x", "y", "vx", "vy"],  # Basic features
                     ["presence", "x", "y", "vx", "vy"],  # With vehicle presence
@@ -1127,7 +1127,7 @@ def main():
                         "sin_h",
                     ],  # With heading information
                 ],
-                "batch_size": [32, 64, 128, 256],
+                "batch_size": [32, 64, 128],
             },
             n_jobs=42,  # Adjust based on your CPU cores and memory
             logger=master_logger,
