@@ -175,7 +175,7 @@ HIGHWAY_CONFIG = {
             "sin_h": [-1, 1],
         },
         "absolute": False,
-        "order": "sorted",
+        "order": "random",
     },
     "action": {
         "type": "ContinuousAction",  # Continuous steering + throttle
